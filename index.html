@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Analisi Costi e Prezzi Carburante</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; color: #333; }
+        h1 { color: #0066cc; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f4f4f4; }
+        .card { background: #f9f9f9; padding: 15px; border-radius: 5px; margin-bottom: 15px; }
+        .btn { padding: 10px 15px; background: #0066cc; color: white; border: none; cursor: pointer; text-decoration: none; border-radius: 4px; display: inline-block; }
+        .btn-secondary { background: #4caf50; }
+    </style>
+</head>
+<body>
+
+    <h1>Report Consumi e Controllo Prezzi Carburante</h1>
+    <div class="card">
+        <p>Analizza i rifornimenti registrati e confronta i prezzi applicati con l'Osservaprezzi ufficiale.</p>
+        <button id="loadDataBtn" class="btn">Carica Dati Rifornimenti</button>
+        <a href="https://carburanti.mise.gov.it/ospzSearch/zona" target="_blank" class="btn btn-secondary">Apri Osservaprezzi MISE</a>
+    </div>
+
+    <table id="fuelTable">
+        <thead>
+            <tr>
+                <th>Data / Ora</th>
+                <th>Veicolo</th>
+                <th>Litri Riforniti</th>
+                <th>Costo Totale</th>
+                <th>Prezzo al Litro Pagato</th>
+                <th>Azione / Verifica</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td colspan="6" style="text-align: center;">Clicca su "Carica Dati Rifornimenti" per iniziare.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Script integrato per MyGeotab Add-In -->
+    <script>
+        // Namespace richiesto da MyGeotab basato sul path definito nel config.json
+        window.geotab = window.geotab || {};
+        window.geotab.addin = window.geotab.addin || {};
+
+        window.geotab.addin.fuelCostPage = function () {
+            let api, state;
+
+            return {
+                initialize: function (freshApi, freshState, initializeCallback) {
+                    api = freshApi;
+                    state = freshState;
+
+                    const loadBtn = document.getElementById('loadDataBtn');
+                    if (loadBtn) {
+                        loadBtn.addEventListener('click', function () {
+                            fetchFillUpsAndCosts(api);
+                        });
+                    }
+
+                    initializeCallback();
+                },
+                focus: function () {
+                    // Eseguito quando la pagina diventa attiva
+                },
+                blur: function () {
+                    // Eseguito quando si cambia pagina
+                }
+            };
+        };
+
+        function fetchFillUpsAndCosts(apiInstance) {
+            const tableBody = document.querySelector('#fuelTable tbody');
+            if (!tableBody) return;
+
+            tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Caricamento in corso...</td></tr>';
+
+            if (!apiInstance) {
+                tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: red;">Errore: API di Geotab non disponibile.</td></tr>';
+                return;
+            }
+
+            // Chiamata API per ottenere i rifornimenti (FillUp)
+            apiInstance.call("Get", {
+                typeName: "FillUp",
+                resultsLimit: 50
+            }, function (result) {
+                tableBody.innerHTML = '';
+
+                if (!result || result.length === 0) {
+                    tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center;">Nessun rifornimento trovato.</td></tr>';
+                    return;
+                }
+
+                result.forEach(function (fillUp) {
+                    let date = new Date(fillUp.dateTime).toLocaleString();
+                    let deviceName = fillUp.device ? (fillUp.device.name || fillUp.device.id) : "Sconosciuto";
+                    let volume = fillUp.volume ? fillUp.volume.toFixed(2) + " L" : "0 L";
+                    let cost = fillUp.cost ? fillUp.cost.toFixed(2) + " " + (fillUp.currencyCode || "EUR") : "Non specificato";
+                    
+                    let unitPrice = "-";
+                    if (fillUp.cost && fillUp.volume && fillUp.volume > 0) {
+                        let price = fillUp.cost / fillUp.volume;
+                        unitPrice = price.toFixed(3) + " " + (fillUp.currencyCode || "EUR") + "/L";
+                    }
+
+                    let actionHtml = `<a href="https://carburanti.mise.gov.it/ospzSearch/zona" target="_blank" style="color: #0066cc; text-decoration: underline;">Verifica sul MISE</a>`;
+
+                    let row = `<tr>
+                        <td>${date}</td>
+                        <td>${deviceName}</td>
+                        <td>${volume}</td>
+                        <td>${cost}</td>
+                        <td><b>${unitPrice}</b></td>
+                        <td>${actionHtml}</td>
+                    </tr>`;
+                    tableBody.innerHTML += row;
+                });
+            }, function (error) {
+                console.error("Errore nel recupero dei dati da MyGeotab:", error);
+                tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: red;">Errore durante il caricamento dei dati.</td></tr>';
+            });
+        }
+    </script>
+</body>
+</html>
