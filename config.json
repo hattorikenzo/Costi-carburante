@@ -1,0 +1,15 @@
+{
+    "name": "CostiCarburanteAddIn",
+    "supportEmail": "matteo.martoni@gmail.com",
+    "version": "1.0",
+    "items": [
+        {
+            "url": "index.html",
+            "path": "fuelCostPage",
+            "menuName": {
+                "en": "Fuel Costs & Consumption",
+                "it": "Costi e Consumi Carburante"
+            }
+        }
+    ]
+}
