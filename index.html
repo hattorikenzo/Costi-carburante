@@ -12,13 +12,13 @@
 <div class="card">
 <p>Rifornimenti MyGeotab e rilevamento alternativo delle soste presso il distributore di riferimento della Peugeot 2008.</p>
 <div class="controls">
-<div><label for="period">Periodo</label><select id="period"><option value="30">Ultimi 30 giorni</option><option value="60" selected>Ultimi 60 giorni</option><option value="90">Ultimi 90 giorni</option></select></div>
+<div><label for="period">Periodo</label><select id="period"><option value="30">Ultimi 30 giorni</option><option value="60" selected>Ultimi 60 giorni</option><option value="90">Ultimi 90 giorni</option><option value="test" selected>Test 20/09–20/10/2026</option></select></div>
 <div><label for="device">Veicolo</label><select id="device"><option value="b1">Peugeot 2008 (b1)</option></select></div>
 <button id="loadDataBtn">Carica storico</button>
 <a class="link" href="https://carburanti.mise.gov.it/ospzSearch/zona" target="_blank" rel="noopener noreferrer">Consulta Osservaprezzi</a>
 </div>
-<p class="note"><strong>Area monitorata:</strong> distributore di riferimento (44.85254, 11.58680), raggio 120 m. I candidati sono ipotesi da confermare, non rifornimenti automatici. Nessun prezzo viene inventato.</p>
-<div id="status" role="status">In attesa di collegamento MyGeotab.</div>
+<p class="note"><strong>Versione diagnostica 2:</strong> mostra anche le visite con pochi punti GPS, senza considerarle rifornimenti certi. <strong>Area monitorata:</strong> distributore di riferimento (44.85254, 11.58680), raggio 120 m. I candidati sono ipotesi da confermare, non rifornimenti automatici. Nessun prezzo viene inventato.</p>
+<div id="diagnostics" class="note" style="white-space:pre-wrap;margin-top:10px"></div><div id="status" role="status">In attesa di collegamento MyGeotab.</div>
 </div>
 <div class="card stats" id="stats"></div>
 <div class="tablewrap"><table><thead><tr><th>Data / ora</th><th>Veicolo</th><th>Stato</th><th>Litri</th><th>Costo</th><th>Prezzo €/L</th><th>Dettaglio / azione</th></tr></thead><tbody id="fuelBody"><tr><td colspan="7">Premi “Carica storico”.</td></tr></tbody></table></div>
@@ -39,25 +39,22 @@ function getSaved(key){try{return JSON.parse(localStorage.getItem(STORAGE_PREFIX
 function save(key,val){try{localStorage.setItem(STORAGE_PREFIX+key,JSON.stringify(val));return true;}catch(e){return false;}}
 function pointToStop(p){return {time:millis(p),latitude:Number(p.latitude),longitude:Number(p.longitude),speed:Number(p.speed||0)};}
 function makeCandidates(logs,ignitions){
-  // Rilevamento limitato al distributore di riferimento, non a tutti gli impianti italiani.
-  var points=logs.map(pointToStop).filter(function(p){return isFinite(p.time)&&isFinite(p.latitude)&&isFinite(p.longitude)&&dist(STATION,p)<=RADIUS_M;}).sort(function(a,b){return a.time-b.time;});
+  // Un singolo punto GPS in prossimita dell'impianto e una VISITA, non prova un rifornimento.
+  var valid=logs.map(pointToStop).filter(function(p){return isFinite(p.time)&&isFinite(p.latitude)&&isFinite(p.longitude)&&Math.abs(p.latitude)<=90&&Math.abs(p.longitude)<=180;}).sort(function(a,b){return a.time-b.time;});
+  var near=valid.filter(function(p){return dist(STATION,p)<=RADIUS_M;});
   var groups=[],group=[];
   function flush(){if(group.length){groups.push(group);group=[];}}
-  points.forEach(function(p){if(group.length&&p.time-group[group.length-1].time>180000)flush();group.push(p);});flush();
-  var stops=[];
-  groups.forEach(function(g){
-    // Valuta l'intera permanenza in zona, ma richiede almeno 45s di velocita bassa.
-    var low=g.filter(function(p){return p.speed<=3;});
-    if(!low.length)return;
-    var longest=0,segmentStart=null,prev=null;
-    low.forEach(function(p){if(prev===null||p.time-prev>180000)segmentStart=p.time;longest=Math.max(longest,p.time-segmentStart);prev=p.time;});
-    if(longest<MIN_DWELL_S*1000)return;
+  near.forEach(function(p){if(group.length&&p.time-group[group.length-1].time>8*60000)flush();group.push(p);});flush();
+  var visits=groups.map(function(g){
     var begin=g[0].time,end=g[g.length-1].time;
-    var off=ignitions.some(function(x){return Number(x.data)===0&&millis(x)>=begin-120000&&millis(x)<=end+120000;});
+    var off=ignitions.some(function(x){return Number(x.data)===0&&millis(x)>=begin-5*60000&&millis(x)<=end+5*60000;});
+    var low=g.filter(function(p){return p.speed<=5;});
     var minDistance=Math.round(Math.min.apply(null,g.map(function(p){return dist(STATION,p);}))); 
-    stops.push({kind:'candidate',time:begin,until:end,off:off,minDistance:minDistance,seconds:Math.round(longest/1000),deviceId:DEVICE_ID,key:DEVICE_ID+':'+new Date(begin).toISOString().slice(0,10)+':'+Math.round(begin/600000)});
+    var duration=Math.round((end-begin)/1000);
+    var likely=(off||low.length>=2&&duration>=MIN_DWELL_S);
+    return {kind:'candidate',time:begin,until:end,off:off,minDistance:minDistance,seconds:duration,points:g.length,lowPoints:low.length,likely:likely,deviceId:DEVICE_ID,key:DEVICE_ID+':'+new Date(begin).toISOString().slice(0,10)+':'+Math.round(begin/600000)};
   });
-  return stops;
+  return {visits:visits,allPoints:valid.length,nearPoints:near.length};
 }
 function td(row,text){var c=document.createElement('td');c.textContent=text;row.appendChild(c);return c;}
 function render(items,deviceName,warning){
@@ -74,10 +71,10 @@ function render(items,deviceName,warning){
    action.textContent='Evento originale, nessuna modifica.';
  }else{
    var saved=getSaved(x.key);candidates++;if(saved&&saved.liters>0){verified++;total+=saved.liters;}
-   st.textContent=saved&&saved.liters>0?'✓ Confermato manualmente':'⚠ Possibile rifornimento';st.className='tag '+(saved&&saved.liters>0?'confirmed':'candidate');
+   st.textContent=saved&&saved.liters>0?'✓ Confermato manualmente':(x.likely?'⚠ Possibile rifornimento':'○ Visita GPS da verificare');st.className='tag '+(saved&&saved.liters>0?'confirmed':'candidate');
    amount.textContent=saved&&saved.liters>0?fmtNumber(saved.liters,2)+' L (manuale)':'Da confermare';
    cost.textContent='Non disponibile';unit.textContent='—';
-   var info=document.createElement('div');info.className='muted';info.textContent='Sosta ≥ '+x.seconds+' s · distanza minima '+x.minDistance+' m · OFF '+(x.off?'registrato':'non registrato');action.appendChild(info);
+   var info=document.createElement('div');info.className='muted';info.textContent='Permanenza GPS '+x.seconds+' s · punti '+x.points+' (lenti '+x.lowPoints+') · distanza minima '+x.minDistance+' m · OFF '+(x.off?'registrato':'non registrato')+' · Non prova il rifornimento';action.appendChild(info);
    var inp=document.createElement('input');inp.className='liters';inp.type='number';inp.min='0.01';inp.max='200';inp.step='0.01';inp.placeholder='Litri';inp.setAttribute('aria-label','Litri realmente riforniti');if(saved)inp.value=saved.liters;action.appendChild(inp);
    var btn=document.createElement('button');btn.className='small';btn.textContent='Conferma';btn.addEventListener('click',function(){var n=Number(inp.value);if(!isFinite(n)||n<=0||n>200){alert('Inserisci litri validi (0–200).');return;}if(!save(x.key,{liters:n,confirmedAt:new Date().toISOString()})){alert('Salvataggio locale non disponibile in questo browser.');return;}render(items,deviceName,warning);});action.appendChild(btn);
    if(saved){var undo=document.createElement('button');undo.className='small secondary';undo.textContent='Annulla';undo.addEventListener('click',function(){try{localStorage.removeItem(STORAGE_PREFIX+x.key);}catch(e){}render(items,deviceName,warning);});action.appendChild(undo);}
@@ -91,22 +88,22 @@ function render(items,deviceName,warning){
 async function load(){if(busy)return;if(!api){setStatus('API MyGeotab non disponibile.',true);return;}
  busy=true;el('loadDataBtn').disabled=true;setStatus('Caricamento eventi e punti GPS in corso…');
  try{
- var now=Date.now(),from=now-Number(el('period').value)*86400000,to=now+1000;
+ var now=Date.now(),test=el('period').value==='test',from=test?Date.parse('2026-09-19T22:00:00Z'):now-Number(el('period').value)*86400000,to=test?Date.parse('2026-10-20T22:00:00Z'):now+1000;
  var fromISO=new Date(from).toISOString(),toISO=new Date(to).toISOString(),search={deviceSearch:{id:DEVICE_ID},fromDate:fromISO,toDate:toISO};
  var devices=await apiGet('Device',{id:DEVICE_ID},2);var deviceName=devices[0]&&devices[0].name||'Peugeot 2008';
  var fillRows=await apiGet('FillUp',search,5000);
  var fills=inRange(fillRows,from,to).filter(function(x){return x.device&&x.device.id===DEVICE_ID;}).map(function(x){return {kind:'fill',time:millis(x),volume:Number(x.volume),cost:Number(x.cost||0),currency:x.currencyCode||'EUR',id:x.id};});
  setStatus('Analisi dei punti GPS e delle soste…');
- var logs=await apiGet('LogRecord',search,50000);
+ var logs=[];var cursor=from;var logLimitHit=false;while(cursor<to){var end=Math.min(cursor+3*86400000,to);var chunk=await apiGet('LogRecord',{deviceSearch:{id:DEVICE_ID},fromDate:new Date(cursor).toISOString(),toDate:new Date(end).toISOString()},50000);if(chunk.length>=50000)logLimitHit=true;logs=logs.concat(inRange(chunk,cursor,end));cursor=end;setStatus('Punti GPS recuperati: '+logs.length+' · analisi in corso…');}
  var ignition=await apiGet('StatusData',{deviceSearch:{id:DEVICE_ID},diagnosticSearch:{id:'DiagnosticIgnitionId'},fromDate:fromISO,toDate:toISO},10000);
- var candidates=makeCandidates(inRange(logs,from,to),inRange(ignition,from,to));
+ var report=makeCandidates(inRange(logs,from,to),inRange(ignition,from,to));var candidates=report.visits;var allVisits=candidates.length;
  // Non duplicare eventi gia rilevati da Geotab; finestra temporale ±20 minuti.
  candidates=candidates.filter(function(c){return !fills.some(function(f){return f.time>=c.time-1200000&&f.time<=c.until+1200000;});});
- var warnings=[];if(logs.length>=50000)warnings.push('ATTENZIONE: raggiunto il limite di 50.000 punti GPS; i candidati potrebbero essere incompleti. Riduci il periodo.');
+ el('diagnostics').textContent='DIAGNOSTICA — GPS totali: '+report.allPoints+' | GPS entro 120 m: '+report.nearPoints+' | Visite rilevate: '+allVisits+' | Visite senza FillUp: '+candidates.length+' | FillUp: '+fills.length+' | Accensioni: '+ignition.length+'\nSe i punti entro 120 m sono zero, verificare le coordinate e il dispositivo. Se le visite sono zero ma i punti ci sono, controllare la logica di raggruppamento.';var warnings=[];if(logLimitHit)warnings.push('ATTENZIONE: limite GPS raggiunto in almeno un intervallo di 3 giorni.');
  if(fillRows.length>=5000)warnings.push('ATTENZIONE: limite FillUp raggiunto.');
  if(ignition.length>=10000)warnings.push('ATTENZIONE: limite accensioni raggiunto.');
- render(fills.concat(candidates),deviceName,warnings.length?warnings.join('\n'):'Caricamento completato. Le soste candidate devono essere confermate.');
- }catch(e){console.error(e);setStatus('Errore API: '+e.message,true);}finally{busy=false;el('loadDataBtn').disabled=false;}
+ render(fills.concat(candidates),deviceName,warnings.length?warnings.join('\n'):'Caricamento completato. Le visite GPS non sono rifornimenti certi: controlla data, ora e distanza.');
+ }catch(e){console.error(e);setStatus('Errore API: '+e.message,true);el('diagnostics').textContent='Caricamento incompleto: '+e.message;}finally{busy=false;el('loadDataBtn').disabled=false;}
 }
 window.geotab=window.geotab||{};window.geotab.addin=window.geotab.addin||{};
 window.geotab.addin.fuelCostPage=function(){return {initialize:function(freshApi,freshState,callback){api=freshApi;el('loadDataBtn').addEventListener('click',load);setStatus('MyGeotab collegato. Premi Carica storico.');if(typeof callback==='function')callback();},focus:function(){},blur:function(){}};};
